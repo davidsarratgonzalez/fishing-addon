@@ -152,6 +152,24 @@ local function Disable()
 end
 
 ---------------------------------------------------------------------------
+-- Fast Loot: instantly loot all items when the loot window opens
+---------------------------------------------------------------------------
+local fastLootFrame = CreateFrame("Frame")
+local lastLootTime = 0
+local LOOT_DEBOUNCE = 0.3
+
+fastLootFrame:RegisterEvent("LOOT_READY")
+fastLootFrame:SetScript("OnEvent", function()
+    if (GetTime() - lastLootTime) < LOOT_DEBOUNCE then return end
+    if GetCVarBool("autoLootDefault") ~= IsModifiedClick("AUTOLOOTTOGGLE") then
+        for i = GetNumLootItems(), 1, -1 do
+            LootSlot(i)
+        end
+        lastLootTime = GetTime()
+    end
+end)
+
+---------------------------------------------------------------------------
 -- Auto-apply on login
 ---------------------------------------------------------------------------
 local frame = CreateFrame("Frame")
