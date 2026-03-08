@@ -1,0 +1,14 @@
+## Interface: 120001
+## Title: Fishing Addon
+## Notes: Mutes all game sounds except the fishing bobber splash.
+## Author: David Sarrat González
+## Version: 1.0.0
+## SavedVariables: FishingAddonDB
+
+sound_ids_0.lua
+sound_ids_1.lua
+sound_ids_2.lua
+sound_ids_3.lua
+sound_ids_4.lua
+sound_ids_5.lua
+core.lua
