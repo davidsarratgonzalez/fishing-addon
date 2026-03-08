@@ -176,26 +176,118 @@ local sellGreysFrame = CreateFrame("Frame")
 
 sellGreysFrame:RegisterEvent("MERCHANT_SHOW")
 sellGreysFrame:SetScript("OnEvent", function()
-    local totalCopper = 0
     local itemsSold = 0
 
     for bag = 0, 4 do
         for slot = 1, C_Container.GetContainerNumSlots(bag) do
             local info = C_Container.GetContainerItemInfo(bag, slot)
-            if info and info.quality == Enum.ItemQuality.Poor then
+            if info and info.quality == Enum.ItemQuality.Poor and (info.sellPrice or 0) > 0 then
                 C_Container.UseContainerItem(bag, slot)
-                totalCopper = totalCopper + (info.sellPrice or 0) * (info.stackCount or 1)
                 itemsSold = itemsSold + 1
             end
         end
     end
 
     if itemsSold > 0 then
-        local gold = math.floor(totalCopper / 10000)
-        local silver = math.floor((totalCopper % 10000) / 100)
-        local copper = totalCopper % 100
-        print(PREFIX .. "Sold " .. itemsSold .. " grey items for " ..
-            gold .. "g " .. silver .. "s " .. copper .. "c")
+        print(PREFIX .. "Sold " .. itemsSold .. " grey items.")
+    end
+end)
+
+---------------------------------------------------------------------------
+-- Soft Targeting: max range/arc so interact key finds nearby objects
+---------------------------------------------------------------------------
+local SOFT_TARGET_CVARS = {
+    SoftTargetInteract          = "3",
+    SoftTargetInteractRange     = "10",
+    SoftTargetInteractArc       = "2",
+    SoftTargetIconGameObject    = "1",
+    SoftTargetIconInteract      = "1",
+    SoftTargetLowPriorityIcons  = "1",
+}
+
+local function ApplySoftTargeting()
+    for cvar, value in pairs(SOFT_TARGET_CVARS) do
+        SetCVar(cvar, value)
+    end
+end
+
+---------------------------------------------------------------------------
+-- Fishing event detection (used by treasure/crab spawn logic)
+---------------------------------------------------------------------------
+local isCurrentlyFishing = false
+local lastCastTime = 0
+
+local fishingStateFrame = CreateFrame("Frame")
+fishingStateFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")
+fishingStateFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
+
+fishingStateFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
+    if unit ~= "player" then return end
+    local name = C_Spell.GetSpellName(spellID)
+    if not name or not name:find("Fishing") then return end
+
+    if event == "UNIT_SPELLCAST_CHANNEL_START" then
+        isCurrentlyFishing = true
+    elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
+        isCurrentlyFishing = false
+        lastCastTime = GetTime()
+    end
+end)
+
+---------------------------------------------------------------------------
+-- Spawn detection: Patient Treasure, Root Crab, Blood Hunter Spirit
+-- Based on PatientTreasureChestAlerts by Creep-SteamwheedleCartel
+-- Detection via CHAT_MSG_MONSTER_EMOTE string matching
+---------------------------------------------------------------------------
+local spawnFrame = CreateFrame("Frame")
+spawnFrame:RegisterEvent("CHAT_MSG_MONSTER_EMOTE")
+
+-- Soft-target detection for Patient Treasure
+spawnFrame:RegisterEvent("PLAYER_SOFT_INTERACT_CHANGED")
+
+local function Alert(eventTag, title, color)
+    PlaySound(8959, "Master")  -- Raid warning sound
+    RaidNotice_AddMessage(RaidWarningFrame, color .. title .. "|r", ChatTypeInfo["RAID_WARNING"])
+    print(PREFIX .. color .. title .. "|r")
+    -- Machine-readable line for the Python bot (via WoW chat log)
+    print("FISHING_ADDON_EVENT:" .. eventTag)
+end
+
+spawnFrame:SetScript("OnEvent", function(self, event, ...)
+    if event == "CHAT_MSG_MONSTER_EMOTE" then
+        local text = ...
+        if not text then return end
+        local msg = text:lower()
+        local playerName = UnitName("player"):lower()
+
+        if msg:find("treasure chest") and msg:find(playerName) then
+            Alert("TREASURE_SPAWNED",
+                "PATIENT TREASURE SPAWNED! Look around and press interact!",
+                "|cffff00ff")
+
+        elseif msg:find("blood hunter spirit") and msg:find(playerName) then
+            Alert("SPIRIT_SPAWNED",
+                "BLOOD HUNTER SPIRIT SPAWNED!",
+                "|cffff4444")
+
+        elseif msg:find("root crab") then
+            -- Root Crab only counts if we are fishing or fished recently
+            if isCurrentlyFishing or (GetTime() - lastCastTime < 15) then
+                Alert("CRAB_SPAWNED",
+                    "ROOT CRAB DETECTED NEARBY!",
+                    "|cffff8800")
+            end
+        end
+
+    elseif event == "PLAYER_SOFT_INTERACT_CHANGED" then
+        if UnitExists("softinteract") then
+            local name = UnitName("softinteract")
+            if name == "Patient Treasure" then
+                Alert("TREASURE_TARGETED",
+                    "PATIENT TREASURE TARGETED - PRESS INTERACT!",
+                    "|cff00ff00")
+            end
+        end
     end
 end)
 
@@ -208,6 +300,10 @@ frame:RegisterEvent("PLAYER_LOGIN")
 frame:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_LOGIN" then
         FishingAddonDB = FishingAddonDB or { enabled = false }
+
+        -- Always apply soft targeting and treasure detection
+        ApplySoftTargeting()
+
         if FishingAddonDB.enabled then
             Enable()
         else
