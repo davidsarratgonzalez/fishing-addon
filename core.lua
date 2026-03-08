@@ -170,6 +170,36 @@ fastLootFrame:SetScript("OnEvent", function()
 end)
 
 ---------------------------------------------------------------------------
+-- Auto-sell grey items when opening a vendor
+---------------------------------------------------------------------------
+local sellGreysFrame = CreateFrame("Frame")
+
+sellGreysFrame:RegisterEvent("MERCHANT_SHOW")
+sellGreysFrame:SetScript("OnEvent", function()
+    local totalCopper = 0
+    local itemsSold = 0
+
+    for bag = 0, 4 do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.quality == Enum.ItemQuality.Poor then
+                C_Container.UseContainerItem(bag, slot)
+                totalCopper = totalCopper + (info.sellPrice or 0) * (info.stackCount or 1)
+                itemsSold = itemsSold + 1
+            end
+        end
+    end
+
+    if itemsSold > 0 then
+        local gold = math.floor(totalCopper / 10000)
+        local silver = math.floor((totalCopper % 10000) / 100)
+        local copper = totalCopper % 100
+        print(PREFIX .. "Sold " .. itemsSold .. " grey items for " ..
+            gold .. "g " .. silver .. "s " .. copper .. "c")
+    end
+end)
+
+---------------------------------------------------------------------------
 -- Auto-apply on login
 ---------------------------------------------------------------------------
 local frame = CreateFrame("Frame")
