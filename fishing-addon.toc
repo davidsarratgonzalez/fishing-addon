@@ -23,5 +23,6 @@ sound_muting.lua
 soft_target.lua
 fast_loot.lua
 sell_greys.lua
+vendor.lua
 spawn_detection.lua
 commands.lua

@@ -18,6 +18,33 @@ SlashCmdList["FISHINGADDON"] = function(msg)
     elseif cmd == "stop" then
         FA.StopNavigation()
         return
+    elseif cmd == "sell" then
+        FA.StartSellSequence()
+        return
+    elseif cmd == "debug" then
+        local state = "unknown"
+        for name, c in pairs(FA.PIXEL_COLORS) do
+            state = name  -- just show last, real check is pixel
+        end
+        print(FA.PREFIX .. "=== DEBUG ===")
+        print("  isActive: " .. tostring(FA.isActive))
+        print("  isSelling: " .. tostring(FA.isSelling))
+        print("  sellStep: " .. tostring(FA.sellStep))
+        print("  navActive: " .. tostring(FA.navActive))
+        print("  treasureHunting: " .. tostring(FA.treasureHunting))
+        print("  isCurrentlyFishing: " .. tostring(FA.isCurrentlyFishing))
+        print("  Vendor mount: " .. (FA.HasVendorMount() and "yes" or "no"))
+        print("  Free bag slots: " .. FA.GetFreeBagSlots())
+        print("  Macro 'FA' index: " .. tostring(GetMacroIndexByName("FA")))
+        local idx = GetMacroIndexByName("FA")
+        if idx > 0 then
+            local name, _, body = GetMacroInfo(idx)
+            print("  Macro body: " .. tostring(body))
+        end
+        print("  IsMounted: " .. tostring(IsMounted()))
+        print("  Target: " .. tostring(UnitName("target") or "none"))
+        print("  =============")
+        return
     end
 
     if FA.isMuting then
@@ -44,6 +71,9 @@ SlashCmdList["FISHINGADDON"] = function(msg)
                 FA.savedNav.x, FA.savedNav.y, FA.savedNav.facing * 180 / math.pi))
         end
         print("  Nav active: " .. tostring(FA.navActive))
+        print("  Vendor mount: " .. (FA.HasVendorMount() and "yes" or "no"))
+        print("  Selling: " .. tostring(FA.isSelling))
+        print("  Free bag slots: " .. FA.GetFreeBagSlots())
 
     else
         print(FA.PREFIX .. "Commands:")
@@ -52,5 +82,6 @@ SlashCmdList["FISHINGADDON"] = function(msg)
         print("  /fa save   - Save current position for navigation")
         print("  /fa nav    - Navigate back to saved position")
         print("  /fa stop   - Stop navigation")
+        print("  /fa sell   - Summon vendor mount and sell greys")
     end
 end

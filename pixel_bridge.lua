@@ -11,7 +11,7 @@ local FA = FishingAddon
 local function ApplyRenderSettings()
     SetCVar("RAIDsettingsEnabled", "0")
     SetCVar("RenderInBackground", "1")
-    SetCVar("MaxFPSBk", "0")  -- no FPS cap in background
+    SetCVar("MaxFPSBk", "999")  -- uncapped background FPS
 end
 
 ---------------------------------------------------------------------------
@@ -68,6 +68,9 @@ FA.PIXEL_COLORS = {
     TREASURE_TARGET = { 1, 1, 0 },       -- Yellow: treasure in soft-target
     SPIRIT_SPAWN    = { 1, 0, 0 },       -- Red: blood hunter spirit
     CRAB_SPAWN      = { 1, 0.5, 0 },     -- Orange: root crab
+    SELL_ACTION     = { 0.5, 0, 1 },     -- Purple: press cast key (macro)
+    SELL_INTERACT   = { 0.5, 1, 0 },     -- Lime: press interact key
+    SELL_WAIT       = { 0.5, 0.5, 0 },   -- Olive: wait, don't press anything
 }
 
 function FA.SetPixelState(state)
