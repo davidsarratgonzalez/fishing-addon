@@ -17,6 +17,8 @@ sounds/sound_ids_5.lua
 core.lua
 
 # Modules (each self-contained, depends only on core)
+pixel_bridge.lua
+navigation.lua
 sound_muting.lua
 soft_target.lua
 fast_loot.lua

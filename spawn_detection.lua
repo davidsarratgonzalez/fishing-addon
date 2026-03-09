@@ -19,9 +19,11 @@ fishingFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
 
     if event == "UNIT_SPELLCAST_CHANNEL_START" then
         FA.isCurrentlyFishing = true
+        FA.SetPixelState("FISHING")
     elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
         FA.isCurrentlyFishing = false
         FA.lastCastTime = GetTime()
+        FA.SetPixelState("IDLE")
     end
 end)
 
@@ -51,17 +53,20 @@ spawnFrame:SetScript("OnEvent", function(self, event, ...)
         local playerName = UnitName("player"):lower()
 
         if msg:find("treasure chest") and msg:find(playerName) then
+            FA.SetPixelState("TREASURE_SPAWN")
             Alert("TREASURE_SPAWNED",
                 "PATIENT TREASURE SPAWNED! Look around and press interact!",
                 "|cffff00ff")
 
         elseif msg:find("blood hunter spirit") and msg:find(playerName) then
+            FA.SetPixelState("SPIRIT_SPAWN")
             Alert("SPIRIT_SPAWNED",
                 "BLOOD HUNTER SPIRIT SPAWNED!",
                 "|cffff4444")
 
         elseif msg:find("root crab") then
             if FA.isCurrentlyFishing or (GetTime() - FA.lastCastTime < 15) then
+                FA.SetPixelState("CRAB_SPAWN")
                 Alert("CRAB_SPAWNED",
                     "ROOT CRAB DETECTED NEARBY!",
                     "|cffff8800")
@@ -70,6 +75,7 @@ spawnFrame:SetScript("OnEvent", function(self, event, ...)
 
     elseif event == "PLAYER_SOFT_INTERACT_CHANGED" then
         if UnitExists("softinteract") and UnitName("softinteract") == "Patient Treasure" then
+            FA.SetPixelState("TREASURE_TARGET")
             Alert("TREASURE_TARGETED",
                 "PATIENT TREASURE TARGETED - PRESS INTERACT!",
                 "|cff00ff00")
