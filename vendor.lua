@@ -70,7 +70,7 @@ end
 ---------------------------------------------------------------------------
 local MACRO_NAME = "FA"
 local MACRO_ICON = "INV_FISHINGPOLE_02"
-local DEFAULT_MACRO_BODY = "/cast Fishing"
+local DEFAULT_MACRO_BODY = "/cleartarget\n/cast Fishing"
 
 local function EnsureMacro()
     local idx = GetMacroIndexByName(MACRO_NAME)
@@ -128,42 +128,56 @@ local function AdvanceSellStep()
         -- Set macro to summon mount
         SetMacroBody("/cast " .. vendorMount.name)
         FA.SetPixelState("SELL_ACTION")
+        local stepStart = GetTime()
 
         -- Watch for mount
-        sellFrame:RegisterEvent("UNIT_AURA")
         sellFrame:SetScript("OnUpdate", function()
             if IsMounted() then
-                sellFrame:UnregisterEvent("UNIT_AURA")
                 sellFrame:SetScript("OnUpdate", nil)
                 FA.SetPixelState("SELL_WAIT")
-                -- Small delay for mount to fully load NPCs
                 sellTimer = C_Timer.NewTimer(2.0, function()
                     FA.sellStep = SELL_STEP_TARGET
                     AdvanceSellStep()
                 end)
+            elseif GetTime() - stepStart > 15 then
+                StopSellSequence("Mount timeout — couldn't summon mount.")
             end
         end)
 
     elseif FA.sellStep == SELL_STEP_TARGET then
-        -- Set macro to target vendor NPC
+        -- Set macro to target vendor NPC — keep spamming SELL_ACTION
+        -- until the NPC actually gets targeted (they take time to spawn)
         SetMacroBody("/target " .. vendorMount.vendorName)
         FA.SetPixelState("SELL_ACTION")
+        local stepStart = GetTime()
 
-        -- Small delay then move to interact
-        sellTimer = C_Timer.NewTimer(1.0, function()
-            FA.sellStep = SELL_STEP_INTERACT
-            AdvanceSellStep()
+        sellFrame:SetScript("OnUpdate", function()
+            local target = UnitName("target")
+            if target and target == vendorMount.vendorName then
+                sellFrame:SetScript("OnUpdate", nil)
+                FA.SetPixelState("SELL_WAIT")
+                sellTimer = C_Timer.NewTimer(0.5, function()
+                    FA.sellStep = SELL_STEP_INTERACT
+                    AdvanceSellStep()
+                end)
+            elseif GetTime() - stepStart > 15 then
+                StopSellSequence("Target timeout — vendor NPC not found.")
+            else
+                FA.SetPixelState("SELL_ACTION")
+            end
         end)
 
     elseif FA.sellStep == SELL_STEP_INTERACT then
         -- Bot needs to press interact key (F) to open vendor
         FA.SetPixelState("SELL_INTERACT")
+        local stepStart = GetTime()
 
         -- Watch for merchant window
         sellFrame:RegisterEvent("MERCHANT_SHOW")
         sellFrame:SetScript("OnEvent", function(self, event)
             if event == "MERCHANT_SHOW" then
                 self:UnregisterEvent("MERCHANT_SHOW")
+                self:SetScript("OnUpdate", nil)
                 FA.sellStep = SELL_STEP_SELLING
                 FA.SetPixelState("SELL_WAIT")
                 -- sell_greys.lua handles MERCHANT_SHOW automatically
@@ -176,17 +190,19 @@ local function AdvanceSellStep()
             end
         end)
 
-        -- Timeout: if merchant doesn't open in 5s, retry
-        sellTimer = C_Timer.NewTimer(5.0, function()
-            if FA.sellStep == SELL_STEP_INTERACT then
-                -- Retry interact
-                AdvanceSellStep()
+        -- Timeout after 15s
+        sellFrame:SetScript("OnUpdate", function()
+            if GetTime() - stepStart > 15 then
+                sellFrame:SetScript("OnUpdate", nil)
+                sellFrame:UnregisterEvent("MERCHANT_SHOW")
+                StopSellSequence("Interact timeout — merchant didn't open.")
             end
         end)
 
     elseif FA.sellStep == SELL_STEP_DISMOUNT then
         SetMacroBody("/dismount")
         FA.SetPixelState("SELL_ACTION")
+        local stepStart = GetTime()
 
         -- Watch for dismount
         sellFrame:SetScript("OnUpdate", function()
@@ -194,11 +210,26 @@ local function AdvanceSellStep()
                 sellFrame:SetScript("OnUpdate", nil)
                 FA.sellStep = SELL_STEP_DONE
                 AdvanceSellStep()
+            elseif GetTime() - stepStart > 10 then
+                StopSellSequence("Dismount timeout.")
             end
         end)
 
     elseif FA.sellStep == SELL_STEP_DONE then
-        StopSellSequence("Done! Resuming fishing.")
+        FA.isSelling = false
+        FA.sellStep = SELL_STEP_NONE
+        sellFrame:UnregisterAllEvents()
+        sellFrame:SetScript("OnUpdate", nil)
+        FA.ResetMacro()
+
+        -- Navigate back to fishing spot if we have one saved
+        if FA.savedNav then
+            print(FA.PREFIX .. "Sell done! Returning to fishing spot...")
+            FA.StartNavigation()
+        else
+            FA.SetPixelState("IDLE")
+            print(FA.PREFIX .. "Sell done! Resuming fishing.")
+        end
     end
 end
 
@@ -232,6 +263,46 @@ function FA.GetFreeBagSlots()
     end
     return free
 end
+
+local function CountGreyItems()
+    local count = 0
+    for bag = 0, 4 do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) do
+            local info = C_Container.GetContainerItemInfo(bag, slot)
+            if info and info.quality == Enum.ItemQuality.Poor and (info.sellPrice or 0) > 0 then
+                count = count + 1
+            end
+        end
+    end
+    return count
+end
+
+function FA.ShouldAutoSell()
+    return vendorMount ~= nil
+        and not FA.isSelling
+        and not FA.navActive
+        and not FA.treasureHunting
+        and not InCombatLockdown()
+        and FA.GetFreeBagSlots() == 0
+        and CountGreyItems() > 0
+end
+
+---------------------------------------------------------------------------
+-- Auto-sell: trigger when bags full + greys exist
+---------------------------------------------------------------------------
+local bagFrame = CreateFrame("Frame")
+bagFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+
+bagFrame:SetScript("OnEvent", function()
+    if FA.ShouldAutoSell() then
+        print(FA.PREFIX .. "Bags full with grey items — auto-selling!")
+        -- Save position before selling so we can nav back
+        if not FA.savedNav then
+            FA.SaveNavPosition()
+        end
+        FA.StartSellSequence()
+    end
+end)
 
 ---------------------------------------------------------------------------
 -- Init
