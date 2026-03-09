@@ -11,8 +11,7 @@ local FA = FishingAddon
 local function ApplyRenderSettings()
     SetCVar("RAIDsettingsEnabled", "0")
     SetCVar("RenderInBackground", "1")
-    -- Reduce background FPS but keep rendering alive
-    SetCVar("MaxFPSBk", "10")
+    SetCVar("MaxFPSBk", "0")  -- no FPS cap in background
 end
 
 ---------------------------------------------------------------------------

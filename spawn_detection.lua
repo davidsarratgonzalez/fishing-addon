@@ -2,8 +2,17 @@
 -- Detects Patient Treasure, Root Crab, and Blood Hunter Spirit spawns.
 -- Based on PatientTreasureChestAlerts by Creep-SteamwheedleCartel.
 -- Also detects when Patient Treasure enters soft-target range.
+--
+-- Treasure automation flow:
+--   1. TREASURE_SPAWN  → auto-save fishing position, pixel = magenta
+--   2. TREASURE_TARGET → soft-target found treasure, pixel = yellow
+--   3. Python presses F (click-to-move walks + loots)
+--   4. LOOT_CLOSED     → treasure done, auto-start NAV back to fishing spot
 
 local FA = FishingAddon
+
+-- Treasure hunting state
+FA.treasureHunting = false
 
 ---------------------------------------------------------------------------
 -- Fishing state tracking (used by Root Crab detection)
@@ -19,11 +28,15 @@ fishingFrame:SetScript("OnEvent", function(self, event, unit, _, spellID)
 
     if event == "UNIT_SPELLCAST_CHANNEL_START" then
         FA.isCurrentlyFishing = true
-        FA.SetPixelState("FISHING")
+        if not FA.treasureHunting then
+            FA.SetPixelState("FISHING")
+        end
     elseif event == "UNIT_SPELLCAST_CHANNEL_STOP" then
         FA.isCurrentlyFishing = false
         FA.lastCastTime = GetTime()
-        FA.SetPixelState("IDLE")
+        if not FA.treasureHunting then
+            FA.SetPixelState("IDLE")
+        end
     end
 end)
 
@@ -34,8 +47,28 @@ local function Alert(eventTag, title, color)
     PlaySound(8959, "Master")
     RaidNotice_AddMessage(RaidWarningFrame, color .. title .. "|r", ChatTypeInfo["RAID_WARNING"])
     print(FA.PREFIX .. color .. title .. "|r")
-    -- Machine-readable line for the Python bot (via WoW chat log)
     print("FISHING_ADDON_EVENT:" .. eventTag)
+end
+
+---------------------------------------------------------------------------
+-- Treasure return: after looting, navigate back to fishing spot
+---------------------------------------------------------------------------
+local treasureFrame = CreateFrame("Frame")
+
+local function StartTreasureReturn()
+    if not FA.treasureHunting then return end
+    FA.treasureHunting = false
+    treasureFrame:UnregisterEvent("LOOT_CLOSED")
+
+    -- Small delay to let loot finish, then start nav
+    C_Timer.After(1.5, function()
+        if FA.savedNav then
+            print(FA.PREFIX .. "Treasure looted! Returning to fishing spot...")
+            FA.StartNavigation()
+        else
+            FA.SetPixelState("IDLE")
+        end
+    end)
 end
 
 ---------------------------------------------------------------------------
@@ -53,9 +86,12 @@ spawnFrame:SetScript("OnEvent", function(self, event, ...)
         local playerName = UnitName("player"):lower()
 
         if msg:find("treasure chest") and msg:find(playerName) then
+            -- Auto-save fishing position before going to treasure
+            FA.SaveNavPosition()
+            FA.treasureHunting = true
             FA.SetPixelState("TREASURE_SPAWN")
             Alert("TREASURE_SPAWNED",
-                "PATIENT TREASURE SPAWNED! Look around and press interact!",
+                "PATIENT TREASURE SPAWNED! Bot will search...",
                 "|cffff00ff")
 
         elseif msg:find("blood hunter spirit") and msg:find(playerName) then
@@ -74,11 +110,20 @@ spawnFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "PLAYER_SOFT_INTERACT_CHANGED" then
-        if UnitExists("softinteract") and UnitName("softinteract") == "Patient Treasure" then
+        if FA.treasureHunting and UnitExists("softinteract")
+                and UnitName("softinteract") == "Patient Treasure" then
             FA.SetPixelState("TREASURE_TARGET")
+            -- Listen for loot completion
+            treasureFrame:RegisterEvent("LOOT_CLOSED")
             Alert("TREASURE_TARGETED",
-                "PATIENT TREASURE TARGETED - PRESS INTERACT!",
+                "PATIENT TREASURE FOUND - Walking to it!",
                 "|cff00ff00")
         end
+    end
+end)
+
+treasureFrame:SetScript("OnEvent", function(self, event)
+    if event == "LOOT_CLOSED" and FA.treasureHunting then
+        StartTreasureReturn()
     end
 end)

@@ -11,6 +11,8 @@ local SOFT_TARGET_CVARS = {
     SoftTargetIconGameObject    = "1",
     SoftTargetIconInteract      = "1",
     SoftTargetLowPriorityIcons  = "1",
+    -- Click-to-move: pressing interact on a soft-target walks to it
+    autoInteract                = "1",
 }
 
 function FA.ApplySoftTargeting()
