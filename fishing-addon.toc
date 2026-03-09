@@ -24,5 +24,6 @@ soft_target.lua
 fast_loot.lua
 sell_greys.lua
 vendor.lua
+lure.lua
 spawn_detection.lua
 commands.lua

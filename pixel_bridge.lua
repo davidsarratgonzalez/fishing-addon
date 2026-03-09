@@ -71,6 +71,7 @@ FA.PIXEL_COLORS = {
     SELL_ACTION     = { 0.5, 0, 1 },     -- Purple: press cast key (macro)
     SELL_INTERACT   = { 0.5, 1, 0 },     -- Lime: press interact key
     SELL_WAIT       = { 0.5, 0.5, 0 },   -- Olive: wait, don't press anything
+    LURE            = { 0, 0.5, 0.5 },   -- Teal: press cast key (applies lure via macro)
 }
 
 function FA.SetPixelState(state)

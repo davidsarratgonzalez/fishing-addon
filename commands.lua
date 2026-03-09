@@ -21,6 +21,65 @@ SlashCmdList["FISHINGADDON"] = function(msg)
     elseif cmd == "sell" then
         FA.StartSellSequence()
         return
+    elseif cmd == "lure" then
+        FA.ToggleLurePanel()
+        return
+    elseif cmd == "soft" then
+        -- Debug: print current soft-target info (interact, enemy, friend)
+        print(FA.PREFIX .. "=== SOFT TARGET DEBUG ===")
+        for _, token in ipairs({"softinteract", "softenemy", "softfriend"}) do
+            if UnitExists(token) then
+                local name = UnitName(token) or "?"
+                local guid = UnitGUID(token) or "?"
+                print(string.format("  %s: |cff00ff00%s|r  GUID: %s", token, name, guid))
+            else
+                print(string.format("  %s: |cff888888(none)|r", token))
+            end
+        end
+        -- Also check hard target
+        if UnitExists("target") then
+            print(string.format("  target: |cffffcc00%s|r  GUID: %s", UnitName("target") or "?", UnitGUID("target") or "?"))
+        else
+            print("  target: |cff888888(none)|r")
+        end
+        -- Show relevant CVars
+        print(string.format("  SoftTargetInteract: %s", GetCVar("SoftTargetInteract")))
+        print(string.format("  SoftTargetInteractRange: %s", GetCVar("SoftTargetInteractRange")))
+        print(string.format("  SoftTargetInteractArc: %s", GetCVar("SoftTargetInteractArc")))
+        print(string.format("  SoftTargetIconInteract: %s", GetCVar("SoftTargetIconInteract")))
+        print(string.format("  SoftTargetIconGameObject: %s", GetCVar("SoftTargetIconGameObject")))
+        print("  ==========================")
+        return
+
+    elseif cmd == "softwatch" then
+        -- Toggle live soft-target watcher (prints every change)
+        if FA._softWatchFrame then
+            FA._softWatchFrame:UnregisterAllEvents()
+            FA._softWatchFrame:SetScript("OnEvent", nil)
+            FA._softWatchFrame = nil
+            print(FA.PREFIX .. "Soft-target watcher |cffff4444OFF|r")
+        else
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("PLAYER_SOFT_INTERACT_CHANGED")
+            f:RegisterEvent("PLAYER_SOFT_ENEMY_CHANGED")
+            f:RegisterEvent("PLAYER_SOFT_FRIEND_CHANGED")
+            f:SetScript("OnEvent", function(_, event)
+                local token = "softinteract"
+                if event == "PLAYER_SOFT_ENEMY_CHANGED" then token = "softenemy" end
+                if event == "PLAYER_SOFT_FRIEND_CHANGED" then token = "softfriend" end
+                if UnitExists(token) then
+                    local name = UnitName(token) or "?"
+                    local guid = UnitGUID(token) or "?"
+                    print(FA.PREFIX .. string.format("|cff00ff00[%s]|r %s → %s (GUID: %s)", event, token, name, guid))
+                else
+                    print(FA.PREFIX .. string.format("|cff888888[%s]|r %s → (cleared)", event, token))
+                end
+            end)
+            FA._softWatchFrame = f
+            print(FA.PREFIX .. "Soft-target watcher |cff00ff00ON|r — will print every change. Use /fa softwatch to stop.")
+        end
+        return
+
     elseif cmd == "debug" then
         local state = "unknown"
         for name, c in pairs(FA.PIXEL_COLORS) do
@@ -83,5 +142,8 @@ SlashCmdList["FISHINGADDON"] = function(msg)
         print("  /fa nav    - Navigate back to saved position")
         print("  /fa stop   - Stop navigation")
         print("  /fa sell   - Summon vendor mount and sell greys")
+        print("  /fa lure   - Open lure selection panel")
+        print("  /fa soft   - Debug: show current soft-target info")
+        print("  /fa softwatch - Toggle live soft-target change logger")
     end
 end
