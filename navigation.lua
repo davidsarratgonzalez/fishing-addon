@@ -9,7 +9,7 @@
 --   (3,0) = Angle:        R=degrees_int(0-255), G=degrees_frac(0-255), B=direction(0=CW/right, 1=CCW/left)
 --
 -- Steps: 0=IDLE, 1=ROTATE_TO_TARGET, 2=WALK, 3=ROTATE_TO_FACING, 4=DONE
--- Actions (pixel G): 0=NONE, 1=TURN_LEFT, 2=TURN_RIGHT, 3=MOVE_FORWARD
+-- Actions (pixel G): 0=NONE, 1=TURN_LEFT, 2=TURN_RIGHT, 3=MOVE_FORWARD, 4=MOVE_BACKWARD
 
 local FA = FishingAddon
 
@@ -24,10 +24,11 @@ local NAV_ACTION_NONE = 0
 local NAV_ACTION_TURN_LEFT = 1
 local NAV_ACTION_TURN_RIGHT = 2
 local NAV_ACTION_MOVE_FORWARD = 3
+local NAV_ACTION_MOVE_BACKWARD = 4
 
 -- Thresholds
-local ANGLE_THRESHOLD = 0.08   -- radians (~5 degrees) — close enough to stop rotating
-local DIST_THRESHOLD = 2.0     -- yards — close enough to stop walking
+local ANGLE_THRESHOLD = 0.03   -- radians (~1.7 degrees) — tight facing accuracy
+local DIST_THRESHOLD = 1.0     -- yards — tight position accuracy
 
 -- Saved position
 FA.savedNav = nil  -- { mapID, x, y, facing }
@@ -216,12 +217,18 @@ local function NavUpdate()
         -- Recalculate heading while walking
         local targetAngle = AngleToTarget(myY, myX, saved.y, saved.x)
         local diff = AngleDiff(facing, targetAngle)
+        local absDiff = math.abs(diff)
 
-        local action = NAV_ACTION_MOVE_FORWARD
-        if math.abs(diff) > ANGLE_THRESHOLD then
+        local action
+        if absDiff > 2.1 then
+            -- Target is behind us (>120°) — walk backward instead of turning around
+            -- This happens when we overshoot the target
+            action = NAV_ACTION_MOVE_BACKWARD
+        elseif absDiff > ANGLE_THRESHOLD then
             -- Need course correction: combine turning with walking
-            -- Python side will hold forward + turn simultaneously
             action = (diff > 0) and NAV_ACTION_TURN_LEFT or NAV_ACTION_TURN_RIGHT
+        else
+            action = NAV_ACTION_MOVE_FORWARD
         end
 
         EncodeNavCommand(NAV_STEP_WALK, action)

@@ -113,7 +113,7 @@ local treasureStartTime = 0
 local treasureFound = false
 
 local function RestoreInteractRange()
-    SetCVar("SoftTargetInteractRange", "10")
+    pcall(SetCVar, "SoftTargetInteractRange", "10")
 end
 
 local function StopTreasureHunting()
@@ -132,20 +132,32 @@ end
 local function StartTreasureReturn()
     if not FA.treasureHunting then return end
     local hasSavedNav = FA.savedNav ~= nil
-    StopTreasureHunting()
 
-    -- Set IDLE immediately so bot exits treasure handler cleanly
-    FA.SetPixelState("IDLE")
+    -- Stop treasure state but DON'T set IDLE yet — keep TREASURE_SPAWN
+    -- so the bot stays in the treasure handler and doesn't cast sideways.
+    scanFrame:SetScript("OnUpdate", nil)
+    ClearTreasureAction()
+    lootFrame:UnregisterAllEvents()
+    lootFrame:SetScript("OnUpdate", nil)
+    FA.treasureHunting = false
+    treasureFound = false
+    RestoreInteractRange()
+
     print(FA.PREFIX .. "Treasure collected! Preparing to return...")
 
     if hasSavedNav then
-        -- Delay to let loot finish, then start nav back (position + facing)
+        -- Delay to let loot finish, then nav back (pixel stays TREASURE_SPAWN → NAV)
         C_Timer.After(1.5, function()
             if FA.savedNav then
                 print(FA.PREFIX .. "Navigating back to fishing spot...")
                 FA.StartNavigation()  -- sets pixel to NAV, bot follows
+            else
+                FA.SetPixelState("IDLE")
             end
         end)
+    else
+        -- No saved nav, just go IDLE
+        FA.SetPixelState("IDLE")
     end
 end
 
@@ -153,9 +165,11 @@ end
 -- Treasure timeout
 ---------------------------------------------------------------------------
 local function OnTreasureTimeout()
-    StopTreasureHunting()
-    FA.SetPixelState("IDLE")
-    print(FA.PREFIX .. "|cffff4444Treasure search timed out (" .. TREASURE_TIMEOUT .. "s). Resuming fishing.|r")
+    print(FA.PREFIX .. "|cffff4444Treasure search timed out (" .. TREASURE_TIMEOUT .. "s). Resuming.|r")
+    -- Defer to next frame since we're called from inside scanFrame OnUpdate
+    C_Timer.After(0, function()
+        StartTreasureReturn()
+    end)
 end
 
 ---------------------------------------------------------------------------
@@ -214,14 +228,21 @@ local function StartTreasureScan()
     treasureStartTime = GetTime()
     treasureFound = false
 
-    -- Cancel fishing if active
+    -- Cancel fishing if active (SpellStopCasting is safe, but pcall for safety)
     if FA.isCurrentlyFishing then
-        SpellStopCasting()
-        print(FA.PREFIX .. "Cancelled fishing for treasure hunt.")
+        local ok, err = pcall(SpellStopCasting)
+        if ok then
+            print(FA.PREFIX .. "Cancelled fishing for treasure hunt.")
+        else
+            print(FA.PREFIX .. "|cffff4444Failed to cancel fishing: " .. tostring(err) .. "|r")
+        end
     end
 
-    -- Boost soft-interact range
-    SetCVar("SoftTargetInteractRange", "40")
+    -- Boost soft-interact range (pcall in case CVar is protected in some state)
+    local ok, err = pcall(SetCVar, "SoftTargetInteractRange", "40")
+    if not ok then
+        print(FA.PREFIX .. "|cffff4444SetCVar blocked: " .. tostring(err) .. "|r")
+    end
 
     -- Random spin direction
     local spinAction = (math.random(1, 2) == 1) and ACTION_TURN_LEFT or ACTION_TURN_RIGHT
@@ -265,6 +286,7 @@ spawnFrame:SetScript("OnEvent", function(self, event, ...)
         local playerName = UnitName("player"):lower()
 
         if msg:find("treasure chest") and msg:find(playerName) then
+            if FA.treasureHunting then return end  -- don't re-trigger
             FA.SaveNavPosition()
             FA.treasureHunting = true
             FA.SetPixelState("TREASURE_SPAWN")
