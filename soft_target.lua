@@ -6,7 +6,7 @@ local FA = FishingAddon
 
 local SOFT_TARGET_CVARS = {
     SoftTargetInteract          = "3",
-    SoftTargetInteractRange     = "10",
+    SoftTargetInteractRange     = "40",   -- high range for treasure detection (set once, no dynamic changes)
     SoftTargetInteractArc       = "2",
     SoftTargetIconGameObject    = "1",
     SoftTargetIconInteract      = "1",

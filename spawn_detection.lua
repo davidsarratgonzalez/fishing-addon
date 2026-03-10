@@ -55,7 +55,9 @@ end)
 ---------------------------------------------------------------------------
 local function Alert(eventTag, title, color)
     PlaySound(8959, "Master")
-    RaidNotice_AddMessage(RaidWarningFrame, color .. title .. "|r", ChatTypeInfo["RAID_WARNING"])
+    -- Avoid RaidNotice_AddMessage — it touches RaidWarningFrame (secure frame)
+    -- which can propagate taint and cause "blocked from Blizzard UI" errors.
+    UIErrorsFrame:AddMessage(color .. title .. "|r", 1, 1, 1, 1, 5)
     print(FA.PREFIX .. color .. title .. "|r")
     print("FISHING_ADDON_EVENT:" .. eventTag)
 end
@@ -113,7 +115,7 @@ local treasureStartTime = 0
 local treasureFound = false
 
 local function RestoreInteractRange()
-    pcall(SetCVar, "SoftTargetInteractRange", "10")
+    -- Range is kept at 40 permanently (set at login) — nothing to restore.
 end
 
 local function StopTreasureHunting()
@@ -173,16 +175,44 @@ local function OnTreasureTimeout()
 end
 
 ---------------------------------------------------------------------------
--- Loot detection (multiple methods)
+-- Treasure scan: spin + interact spam + loot detection (all at once)
+--
+-- Detection methods (all active from the start):
+--   1. LOOT_CLOSED event — treasure looted directly (close range)
+--   2. GetUnitSpeed > 0 — click-to-move triggered, stop spin
+--   3. Soft-target appeared then disappeared — treasure collected
+--   4. Master timeout — give up after TREASURE_TIMEOUT seconds
 ---------------------------------------------------------------------------
-local function SetupLootDetection()
+local softTargetSeen = false
+
+local function StartTreasureScan()
+    treasureStartTime = GetTime()
+    treasureFound = false
+    softTargetSeen = false
+
+    -- SpellStopCasting() is protected — bot's rotation cancels fishing automatically.
+    if FA.isCurrentlyFishing then
+        print(FA.PREFIX .. "Fishing active — bot rotation will cancel it.")
+    end
+
+    -- Random spin direction
+    local spinAction = (math.random(1, 2) == 1) and ACTION_TURN_LEFT or ACTION_TURN_RIGHT
+    local dirName = (spinAction == ACTION_TURN_LEFT) and "left" or "right"
+    print(FA.PREFIX .. "Spinning " .. dirName .. "...")
+    SetTreasureAction(spinAction)
+
+    -- Register loot events immediately (not after speed detection)
     lootFrame:RegisterEvent("LOOT_OPENED")
     lootFrame:RegisterEvent("LOOT_CLOSED")
-
     lootFrame:SetScript("OnEvent", function(self, event)
         if not FA.treasureHunting then return end
         print(FA.PREFIX .. "Treasure loot event: " .. event)
-        if event == "LOOT_CLOSED" then
+        if event == "LOOT_OPENED" then
+            -- Treasure is being looted — stop spinning NOW
+            treasureFound = true
+            SetTreasureAction(ACTION_NONE)
+            print(FA.PREFIX .. "|cff00ff00Loot window opened! Stopping spin.|r")
+        elseif event == "LOOT_CLOSED" then
             C_Timer.After(0.5, function()
                 if FA.treasureHunting then
                     StartTreasureReturn()
@@ -191,75 +221,43 @@ local function SetupLootDetection()
         end
     end)
 
-    -- Also poll: if softinteract disappears after being found, treasure was looted
-    local pollStart = GetTime()
-    lootFrame:SetScript("OnUpdate", function(self)
-        if not FA.treasureHunting then
-            self:SetScript("OnUpdate", nil)
-            return
-        end
-        -- After treasure was found and a few seconds passed, check if gone
-        if treasureFound and not CheckSoftTarget() and (GetTime() - pollStart > 3.0) then
-            self:SetScript("OnUpdate", nil)
-            print(FA.PREFIX .. "Treasure soft-target gone. Assuming looted.")
-            if FA.treasureHunting then
-                StartTreasureReturn()
-            end
-        end
-        -- Safety timeout for interact phase
-        if GetTime() - pollStart > 60 then
-            self:SetScript("OnUpdate", nil)
-            print(FA.PREFIX .. "Treasure interact timeout (60s).")
-            if FA.treasureHunting then
-                StartTreasureReturn()
-            end
-        end
-    end)
-end
-
----------------------------------------------------------------------------
--- Treasure scan: spin + interact spam (addon controls turn via pixel)
---
--- Phase 1 (scanning): action=TURN_LEFT → bot turns + spams interact
--- Phase 2 (found):    action=NONE      → bot stops turning, keeps spamming
---                     click-to-move walks to treasure, interact loots it
----------------------------------------------------------------------------
-local function StartTreasureScan()
-    treasureStartTime = GetTime()
-    treasureFound = false
-
-    -- Note: SpellStopCasting() is a protected function — can't call it from
-    -- an event handler. The bot's rotation (key_down left/right) will cancel
-    -- the fishing channel automatically.
-    if FA.isCurrentlyFishing then
-        print(FA.PREFIX .. "Fishing active — bot rotation will cancel it.")
-    end
-
-    -- Boost soft-interact range
-    SetCVar("SoftTargetInteractRange", "40")
-
-    -- Random spin direction
-    local spinAction = (math.random(1, 2) == 1) and ACTION_TURN_LEFT or ACTION_TURN_RIGHT
-    local dirName = (spinAction == ACTION_TURN_LEFT) and "left" or "right"
-    print(FA.PREFIX .. "Spinning " .. dirName .. "...")
-    SetTreasureAction(spinAction)
-
+    -- Main scan loop
     scanFrame:SetScript("OnUpdate", function()
+        if not FA.treasureHunting then return end
+
         -- Master timeout
         if GetTime() - treasureStartTime > TREASURE_TIMEOUT then
             OnTreasureTimeout()
             return
         end
 
+        -- Track soft-target: if treasure appeared then disappeared = looted
+        if CheckSoftTarget() then
+            if not softTargetSeen then
+                softTargetSeen = true
+                print(FA.PREFIX .. "Soft-target: treasure detected!")
+            end
+        elseif softTargetSeen and not treasureFound then
+            -- Soft-target was there but now it's gone — treasure was looted
+            -- (could happen if treasure is right next to us: interact → loot → gone)
+            print(FA.PREFIX .. "Soft-target disappeared. Treasure collected!")
+            treasureFound = true
+            SetTreasureAction(ACTION_NONE)
+            C_Timer.After(1.0, function()
+                if FA.treasureHunting then
+                    StartTreasureReturn()
+                end
+            end)
+            return
+        end
+
         if not treasureFound then
             -- Detect click-to-move: player starts walking (speed > 0)
-            -- This means the interact spam caught the treasure and triggered movement
             local speed = GetUnitSpeed("player")
             if speed > 0 then
                 treasureFound = true
                 SetTreasureAction(ACTION_NONE)  -- stop spinning
-                print(FA.PREFIX .. "|cff00ff00Player moving (click-to-move)! Stopping spin, walking to treasure...|r")
-                SetupLootDetection()
+                print(FA.PREFIX .. "|cff00ff00Player moving (click-to-move)! Stopping spin...|r")
             end
         end
     end)
