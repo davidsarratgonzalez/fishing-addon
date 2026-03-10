@@ -1,20 +1,27 @@
 -- Fishing Addon - Spawn Detection
 -- Detects Patient Treasure, Root Crab, and Blood Hunter Spirit spawns.
--- Based on PatientTreasureChestAlerts by Creep-SteamwheedleCartel.
 --
 -- Treasure automation flow:
---   1. TREASURE_SPAWN  → save position, start scanning, bot spins + presses macro
---   2. TREASURE_TARGET → treasure found, bot presses interact repeatedly
---   3. LOOT_CLOSED     → treasure done, auto-start NAV back to fishing spot
---   Timeout (3 min)    → give up, reset to IDLE
+--   1. TREASURE_SPAWN → cancel fishing, boost interact range
+--   2. Continuous spin + bot spams interact every ~100ms
+--      Nav pixel 1 action: 1=turn_left, 0=stop_turning
+--      Bot ALWAYS spams interact (F) during TREASURE_SPAWN regardless of action
+--   3. Addon detects soft-target → action=0 (stop spin, interact spam continues)
+--      Click-to-move walks player to treasure, interact loots it
+--   4. Loot detected → nav back to fishing spot
+--   5. 3-min master timeout → give up, reset to IDLE
 
 local FA = FishingAddon
 
 -- Treasure hunting state
 FA.treasureHunting = false
 
--- Scan timeout: max time from treasure spawn to give up (3 minutes)
-local TREASURE_TIMEOUT = 180
+-- Config
+local TREASURE_TIMEOUT = 180   -- 3 min master timeout
+
+-- Nav pixel action values (bot reads G channel of pixel 1)
+local ACTION_NONE      = 0
+local ACTION_TURN_LEFT = 1
 
 ---------------------------------------------------------------------------
 -- Fishing state tracking (used by Root Crab detection + pixel state)
@@ -53,18 +60,15 @@ local function Alert(eventTag, title, color)
 end
 
 ---------------------------------------------------------------------------
--- Treasure detection: robust multi-method scanner
+-- Soft-target detection
+-- Patient Treasure is a game object — /target doesn't work.
 ---------------------------------------------------------------------------
-local scanFrame = CreateFrame("Frame")
-local treasureStartTime = 0
-
--- Loose name match: handles locale differences, partial names, etc.
 local TREASURE_NAMES = {
     "patient treasure",
-    "tesoro paciente",       -- Spanish
-    "trésor patient",        -- French
-    "geduldiger schatz",     -- German
-    "treasure",              -- fallback partial match
+    "tesoro paciente",
+    "trésor patient",
+    "geduldiger schatz",
+    "treasure",
 }
 
 local function IsTreasureName(name)
@@ -79,11 +83,8 @@ end
 local function CheckSoftTarget()
     if UnitExists("softinteract") then
         local name = UnitName("softinteract")
-        if IsTreasureName(name) then
-            return true
-        end
+        if IsTreasureName(name) then return true end
     end
-    -- Also check generic soft-target tokens
     if UnitExists("softenemy") then
         local name = UnitName("softenemy")
         if IsTreasureName(name) then return true end
@@ -91,41 +92,37 @@ local function CheckSoftTarget()
     return false
 end
 
--- Note: Patient Treasure is a game object, NOT a unit.
--- /target doesn't work on it. Detection is via soft-interact only.
-
 ---------------------------------------------------------------------------
--- Treasure found → stop scanning, set interact pixel
+-- Nav pixel helper
 ---------------------------------------------------------------------------
-local treasureFrame = CreateFrame("Frame")
+local function SetTreasureAction(action)
+    FA.SetNavPixel(1, 1 / 255, action / 255, 0)
+end
 
-local function OnTreasureFound()
-    -- Stop scanning
-    scanFrame:SetScript("OnUpdate", nil)
-
-    FA.SetPixelState("TREASURE_TARGET")
-
-    -- Listen for loot completion
-    treasureFrame:RegisterEvent("LOOT_CLOSED")
-
-    Alert("TREASURE_TARGETED",
-        "PATIENT TREASURE FOUND! Pressing interact...",
-        "|cff00ff00")
+local function ClearTreasureAction()
+    FA.SetNavPixel(1, 0, 0, 0)
 end
 
 ---------------------------------------------------------------------------
--- Treasure timeout → give up, resume fishing
+-- Cleanup
 ---------------------------------------------------------------------------
+local scanFrame = CreateFrame("Frame")
+local lootFrame = CreateFrame("Frame")
+local treasureStartTime = 0
+local treasureFound = false
+
 local function RestoreInteractRange()
     SetCVar("SoftTargetInteractRange", "10")
 end
 
-local function OnTreasureTimeout()
+local function StopTreasureHunting()
     scanFrame:SetScript("OnUpdate", nil)
+    ClearTreasureAction()
+    lootFrame:UnregisterAllEvents()
+    lootFrame:SetScript("OnUpdate", nil)
     FA.treasureHunting = false
+    treasureFound = false
     RestoreInteractRange()
-    FA.SetPixelState("IDLE")
-    print(FA.PREFIX .. "|cffff4444Treasure search timed out (" .. TREASURE_TIMEOUT .. "s). Resuming fishing.|r")
 end
 
 ---------------------------------------------------------------------------
@@ -133,11 +130,8 @@ end
 ---------------------------------------------------------------------------
 local function StartTreasureReturn()
     if not FA.treasureHunting then return end
-    FA.treasureHunting = false
-    treasureFrame:UnregisterEvent("LOOT_CLOSED")
-    RestoreInteractRange()
+    StopTreasureHunting()
 
-    -- Small delay to let loot finish, then start nav
     C_Timer.After(1.5, function()
         if FA.savedNav then
             print(FA.PREFIX .. "Treasure looted! Returning to fishing spot...")
@@ -149,26 +143,99 @@ local function StartTreasureReturn()
 end
 
 ---------------------------------------------------------------------------
--- Start treasure scanning (called when TREASURE_SPAWN detected)
+-- Treasure timeout
+---------------------------------------------------------------------------
+local function OnTreasureTimeout()
+    StopTreasureHunting()
+    FA.SetPixelState("IDLE")
+    print(FA.PREFIX .. "|cffff4444Treasure search timed out (" .. TREASURE_TIMEOUT .. "s). Resuming fishing.|r")
+end
+
+---------------------------------------------------------------------------
+-- Loot detection (multiple methods)
+---------------------------------------------------------------------------
+local function SetupLootDetection()
+    lootFrame:RegisterEvent("LOOT_OPENED")
+    lootFrame:RegisterEvent("LOOT_CLOSED")
+
+    lootFrame:SetScript("OnEvent", function(self, event)
+        if not FA.treasureHunting then return end
+        print(FA.PREFIX .. "Treasure loot event: " .. event)
+        if event == "LOOT_CLOSED" then
+            C_Timer.After(0.5, function()
+                if FA.treasureHunting then
+                    StartTreasureReturn()
+                end
+            end)
+        end
+    end)
+
+    -- Also poll: if softinteract disappears after being found, treasure was looted
+    local pollStart = GetTime()
+    lootFrame:SetScript("OnUpdate", function(self)
+        if not FA.treasureHunting then
+            self:SetScript("OnUpdate", nil)
+            return
+        end
+        -- After treasure was found and a few seconds passed, check if gone
+        if treasureFound and not CheckSoftTarget() and (GetTime() - pollStart > 3.0) then
+            self:SetScript("OnUpdate", nil)
+            print(FA.PREFIX .. "Treasure soft-target gone. Assuming looted.")
+            if FA.treasureHunting then
+                StartTreasureReturn()
+            end
+        end
+        -- Safety timeout for interact phase
+        if GetTime() - pollStart > 60 then
+            self:SetScript("OnUpdate", nil)
+            print(FA.PREFIX .. "Treasure interact timeout (60s).")
+            if FA.treasureHunting then
+                StartTreasureReturn()
+            end
+        end
+    end)
+end
+
+---------------------------------------------------------------------------
+-- Treasure scan: spin + interact spam (addon controls turn via pixel)
+--
+-- Phase 1 (scanning): action=TURN_LEFT → bot turns + spams interact
+-- Phase 2 (found):    action=NONE      → bot stops turning, keeps spamming
+--                     click-to-move walks to treasure, interact loots it
 ---------------------------------------------------------------------------
 local function StartTreasureScan()
     treasureStartTime = GetTime()
+    treasureFound = false
 
-    -- Boost soft-target interact range for treasure searching
+    -- Cancel fishing if active
+    if FA.isCurrentlyFishing then
+        SpellStopCasting()
+        print(FA.PREFIX .. "Cancelled fishing for treasure hunt.")
+    end
+
+    -- Boost soft-interact range
     SetCVar("SoftTargetInteractRange", "40")
 
-    -- OnUpdate scanner: checks every frame for soft-interact treasure
+    -- Start spinning (bot spams interact regardless of action value)
+    SetTreasureAction(ACTION_TURN_LEFT)
+
     scanFrame:SetScript("OnUpdate", function()
-        -- Timeout check
+        -- Master timeout
         if GetTime() - treasureStartTime > TREASURE_TIMEOUT then
             OnTreasureTimeout()
             return
         end
 
-        -- Check soft-target (interact, enemy)
-        if CheckSoftTarget() then
-            OnTreasureFound()
-            return
+        if not treasureFound then
+            -- Detect click-to-move: player starts walking (speed > 0)
+            -- This means the interact spam caught the treasure and triggered movement
+            local speed = GetUnitSpeed("player")
+            if speed > 0 then
+                treasureFound = true
+                SetTreasureAction(ACTION_NONE)  -- stop spinning
+                print(FA.PREFIX .. "|cff00ff00Player moving (click-to-move)! Stopping spin, walking to treasure...|r")
+                SetupLootDetection()
+            end
         end
     end)
 end
@@ -188,7 +255,6 @@ spawnFrame:SetScript("OnEvent", function(self, event, ...)
         local playerName = UnitName("player"):lower()
 
         if msg:find("treasure chest") and msg:find(playerName) then
-            -- Auto-save fishing position before going to treasure
             FA.SaveNavPosition()
             FA.treasureHunting = true
             FA.SetPixelState("TREASURE_SPAWN")
@@ -213,15 +279,9 @@ spawnFrame:SetScript("OnEvent", function(self, event, ...)
         end
 
     elseif event == "PLAYER_SOFT_INTERACT_CHANGED" then
-        -- Backup detection via event (in addition to OnUpdate scanner)
-        if FA.treasureHunting and CheckSoftTarget() then
-            OnTreasureFound()
+        -- Just log for debug, movement detection handles stopping
+        if FA.treasureHunting and not treasureFound and CheckSoftTarget() then
+            print(FA.PREFIX .. "Soft-target: treasure in range!")
         end
-    end
-end)
-
-treasureFrame:SetScript("OnEvent", function(self, event)
-    if event == "LOOT_CLOSED" and FA.treasureHunting then
-        StartTreasureReturn()
     end
 end)

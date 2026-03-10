@@ -79,6 +79,10 @@ function FA.SetPixelState(state)
     if c then
         FA.SetPixelColor(c[1], c[2], c[3])
     end
+    -- Safety: whenever returning to IDLE, ensure macro is reset to fishing
+    if state == "IDLE" and FA.ResetMacro and not InCombatLockdown() then
+        FA.ResetMacro()
+    end
 end
 
 ---------------------------------------------------------------------------
