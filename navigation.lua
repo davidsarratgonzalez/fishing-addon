@@ -27,7 +27,7 @@ local NAV_ACTION_MOVE_FORWARD = 3
 local NAV_ACTION_MOVE_BACKWARD = 4
 
 -- Thresholds
-local ANGLE_THRESHOLD = 0.03   -- radians (~1.7 degrees) — tight facing accuracy
+local ANGLE_THRESHOLD = 0.07   -- radians (~4 degrees) — accommodates one micro-tap at ~180°/s
 local DIST_THRESHOLD = 1.0     -- yards — tight position accuracy
 
 -- Saved position
