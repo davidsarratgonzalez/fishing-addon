@@ -4,12 +4,17 @@
 --
 -- Pixel layout:
 --   (0,0) = State pixel (IDLE/FISHING/etc, existing)
---   (1,0) = Nav command:  R=step(0-3), G=action(0-3), B=0
---   (2,0) = Distance:     R=yards_int(0-255), G=yards_frac(0-255), B=0
---   (3,0) = Angle:        R=degrees_int(0-255), G=degrees_frac(0-255), B=direction(0=CW/right, 1=CCW/left)
+--   (1,0) = Nav command:  R=step(0-4), G=action(0-3), B=frameCounter(0-255)
+--   (2,0) = Distance:     R=yards_int, G=yards_frac, B=flags
+--   (3,0) = Angle:        R=degrees_int, G=degrees_frac, B=direction(0=CW/right, 1=CCW/left)
 --
 -- Steps: 0=IDLE, 1=ROTATE_TO_TARGET, 2=WALK, 3=ROTATE_TO_FACING, 4=DONE
--- Actions (pixel G): 0=NONE, 1=TURN_LEFT, 2=TURN_RIGHT, 3=MOVE_FORWARD, 4=MOVE_BACKWARD
+-- Actions (pixel G): 0=NONE, 1=TURN_LEFT, 2=TURN_RIGHT, 3=MOVE_FORWARD
+--
+-- Distance flags (pixel 2 B channel):
+--   bit 0: close mode (dist < 2 yards)
+--   bit 1: very close mode (dist < 0.5 yards — arrived)
+--   bit 2: heading behind player (> 90°)
 
 local FA = FishingAddon
 
@@ -24,11 +29,11 @@ local NAV_ACTION_NONE = 0
 local NAV_ACTION_TURN_LEFT = 1
 local NAV_ACTION_TURN_RIGHT = 2
 local NAV_ACTION_MOVE_FORWARD = 3
-local NAV_ACTION_MOVE_BACKWARD = 4
 
 -- Thresholds
-local ANGLE_THRESHOLD = 0.07   -- radians (~4 degrees) — accommodates one micro-tap at ~180°/s
-local DIST_THRESHOLD = 1.0     -- yards — tight position accuracy
+local ANGLE_THRESHOLD = 0.03   -- radians (~1.7°) — matches minimum pulse resolution
+local DIST_THRESHOLD  = 0.5    -- yards — tight positional accuracy
+local HEADING_GATE    = 0.26   -- radians (~15°) — stop walking and re-rotate if heading drifts
 
 -- Saved position
 FA.savedNav = nil  -- { mapID, x, y, facing }
@@ -41,14 +46,12 @@ FA.navStep = NAV_STEP_IDLE
 local PI = math.pi
 local TWO_PI = 2 * PI
 
--- Normalize angle to [0, 2π)
 local function NormalizeAngle(a)
     a = a % TWO_PI
     if a < 0 then a = a + TWO_PI end
     return a
 end
 
--- Shortest signed angle from 'from' to 'to' (positive = CCW, negative = CW)
 local function AngleDiff(from, to)
     local diff = NormalizeAngle(to) - NormalizeAngle(from)
     if diff > PI then diff = diff - TWO_PI end
@@ -56,12 +59,9 @@ local function AngleDiff(from, to)
     return diff
 end
 
--- Angle from current position to target position
--- WoW: UnitPosition returns (y, x) in yards. GetPlayerFacing: 0=North, increases CCW.
 local function AngleToTarget(myY, myX, targetY, targetX)
     local dx = targetX - myX
     local dy = targetY - myY
-    -- atan2(dx, dy) gives angle from north, increasing CCW (matches WoW convention)
     return NormalizeAngle(math.atan2(dx, dy))
 end
 
@@ -74,32 +74,38 @@ end
 ---------------------------------------------------------------------------
 -- Encode values into pixel colors (0.0-1.0 range, maps to 0-255 in GDI)
 ---------------------------------------------------------------------------
+local navFrameCounter = 0
+
 local function EncodeNavCommand(step, action)
-    FA.SetNavPixel(1, step / 255, action / 255, 0)
+    navFrameCounter = (navFrameCounter + 1) % 256
+    FA.SetNavPixel(1, step / 255, action / 255, navFrameCounter / 255)
 end
 
-local function EncodeDistance(yards)
+local function EncodeDistance(yards, headingAbsDiff)
     local clamped = math.min(yards, 255.99)
     local int_part = math.floor(clamped)
     local frac_part = math.floor((clamped - int_part) * 255)
-    FA.SetNavPixel(2, int_part / 255, frac_part / 255, 0)
+    -- Distance flags in B channel
+    local flags = 0
+    if yards < 2 then flags = flags + 1 end       -- close mode
+    if yards < DIST_THRESHOLD then flags = flags + 2 end  -- arrived
+    if headingAbsDiff and headingAbsDiff > 1.57 then flags = flags + 4 end  -- target behind
+    FA.SetNavPixel(2, int_part / 255, frac_part / 255, flags / 255)
 end
 
 local function EncodeAngle(radians, direction)
-    -- Convert to degrees for easier reading on the Python side
     local degrees = math.abs(radians) * 180 / PI
     local clamped = math.min(degrees, 255.99)
     local int_part = math.floor(clamped)
     local frac_part = math.floor((clamped - int_part) * 255)
-    -- B channel: 0 = CW (turn right), 1 = CCW (turn left)
     local dirVal = (direction > 0) and 1 or 0
     FA.SetNavPixel(3, int_part / 255, frac_part / 255, dirVal / 255)
 end
 
 local function ClearNavPixels()
-    EncodeNavCommand(NAV_STEP_IDLE, NAV_ACTION_NONE)
-    EncodeDistance(0)
-    EncodeAngle(0, 0)
+    FA.SetNavPixel(1, 0, 0, 0)
+    FA.SetNavPixel(2, 0, 0, 0)
+    FA.SetNavPixel(3, 0, 0, 0)
 end
 
 ---------------------------------------------------------------------------
@@ -138,7 +144,7 @@ function FA.SaveNavPosition()
 end
 
 ---------------------------------------------------------------------------
--- Navigation loop: /fa nav
+-- Navigation loop
 ---------------------------------------------------------------------------
 local navFrame = CreateFrame("Frame")
 
@@ -183,7 +189,6 @@ local function NavUpdate()
     if FA.navStep == NAV_STEP_ROTATE_TO_TARGET then
         -- Step 1: Rotate to face the target position
         if dist <= DIST_THRESHOLD then
-            -- Already close enough, skip to facing correction
             FA.navStep = NAV_STEP_ROTATE_TO_FACING
             return
         end
@@ -195,45 +200,46 @@ local function NavUpdate()
             -- Aligned, start walking
             FA.navStep = NAV_STEP_WALK
             EncodeNavCommand(NAV_STEP_WALK, NAV_ACTION_MOVE_FORWARD)
-            EncodeDistance(dist)
+            EncodeDistance(dist, 0)
             EncodeAngle(0, 0)
         else
-            -- Need to turn: diff > 0 = CCW = turn left, diff < 0 = CW = turn right
             local action = (diff > 0) and NAV_ACTION_TURN_LEFT or NAV_ACTION_TURN_RIGHT
             EncodeNavCommand(NAV_STEP_ROTATE_TO_TARGET, action)
-            EncodeDistance(dist)
+            EncodeDistance(dist, math.abs(diff))
             EncodeAngle(diff, (diff > 0) and 1 or -1)
         end
 
     elseif FA.navStep == NAV_STEP_WALK then
-        -- Step 2: Walk toward target, self-correcting heading
+        -- Step 2: Walk toward target with live steering
         if dist <= DIST_THRESHOLD then
-            -- Arrived, correct facing
             FA.navStep = NAV_STEP_ROTATE_TO_FACING
             EncodeNavCommand(NAV_STEP_ROTATE_TO_FACING, NAV_ACTION_NONE)
             return
         end
 
-        -- Recalculate heading while walking
         local targetAngle = AngleToTarget(myY, myX, saved.y, saved.x)
         local diff = AngleDiff(facing, targetAngle)
         local absDiff = math.abs(diff)
 
-        local action
-        if absDiff > 2.1 then
-            -- Target is behind us (>120°) — walk backward instead of turning around
-            -- This happens when we overshoot the target
-            action = NAV_ACTION_MOVE_BACKWARD
+        if absDiff > HEADING_GATE then
+            -- Heading drifted too far: stop walking, re-rotate
+            FA.navStep = NAV_STEP_ROTATE_TO_TARGET
+            local action = (diff > 0) and NAV_ACTION_TURN_LEFT or NAV_ACTION_TURN_RIGHT
+            EncodeNavCommand(NAV_STEP_ROTATE_TO_TARGET, action)
+            EncodeDistance(dist, absDiff)
+            EncodeAngle(diff, (diff > 0) and 1 or -1)
         elseif absDiff > ANGLE_THRESHOLD then
-            -- Need course correction: combine turning with walking
-            action = (diff > 0) and NAV_ACTION_TURN_LEFT or NAV_ACTION_TURN_RIGHT
+            -- Mild steering correction while walking
+            local action = (diff > 0) and NAV_ACTION_TURN_LEFT or NAV_ACTION_TURN_RIGHT
+            EncodeNavCommand(NAV_STEP_WALK, action)
+            EncodeDistance(dist, absDiff)
+            EncodeAngle(diff, (diff > 0) and 1 or -1)
         else
-            action = NAV_ACTION_MOVE_FORWARD
+            -- On course, walk straight
+            EncodeNavCommand(NAV_STEP_WALK, NAV_ACTION_MOVE_FORWARD)
+            EncodeDistance(dist, 0)
+            EncodeAngle(0, 0)
         end
-
-        EncodeNavCommand(NAV_STEP_WALK, action)
-        EncodeDistance(dist)
-        EncodeAngle(diff, (diff > 0) and 1 or -1)
 
     elseif FA.navStep == NAV_STEP_ROTATE_TO_FACING then
         -- Step 3: Rotate to match saved facing direction
@@ -243,7 +249,7 @@ local function NavUpdate()
             -- Done!
             FA.navStep = NAV_STEP_DONE
             EncodeNavCommand(NAV_STEP_DONE, NAV_ACTION_NONE)
-            EncodeDistance(0)
+            EncodeDistance(0, 0)
             EncodeAngle(0, 0)
             StopNav("Arrived at saved position!")
             return
@@ -251,7 +257,7 @@ local function NavUpdate()
 
         local action = (diff > 0) and NAV_ACTION_TURN_LEFT or NAV_ACTION_TURN_RIGHT
         EncodeNavCommand(NAV_STEP_ROTATE_TO_FACING, action)
-        EncodeDistance(0)
+        EncodeDistance(0, math.abs(diff))
         EncodeAngle(diff, (diff > 0) and 1 or -1)
     end
 end
@@ -273,8 +279,8 @@ function FA.StartNavigation()
     FA.SetPixelState("NAV")
 
     print(FA.PREFIX .. string.format(
-        "Navigating to saved position (%.1f, %.1f)...",
-        FA.savedNav.x, FA.savedNav.y
+        "Navigating to (%.1f, %.1f) facing %.1f°...",
+        FA.savedNav.x, FA.savedNav.y, FA.savedNav.facing * 180 / PI
     ))
 
     navFrame:SetScript("OnUpdate", function()
