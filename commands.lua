@@ -24,6 +24,10 @@ SlashCmdList["FISHINGADDON"] = function(msg)
     elseif cmd == "lure" then
         FA.ToggleLurePanel()
         return
+    elseif cmd:sub(1, 6) == "logout" then
+        local arg = cmd:sub(8):trim()
+        FA.HandleLogoutCommand(arg)
+        return
     elseif cmd == "soft" then
         -- Debug: print current soft-target info (interact, enemy, friend)
         print(FA.PREFIX .. "=== SOFT TARGET DEBUG ===")
@@ -143,6 +147,7 @@ SlashCmdList["FISHINGADDON"] = function(msg)
         print("  /fa stop   - Stop navigation")
         print("  /fa sell   - Summon vendor mount and sell greys")
         print("  /fa lure   - Open lure selection panel")
+        print("  /fa logout HH:MM:SS - Set auto-logout time (or 'off')")
         print("  /fa soft   - Debug: show current soft-target info")
         print("  /fa softwatch - Toggle live soft-target change logger")
     end

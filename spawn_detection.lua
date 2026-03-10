@@ -20,8 +20,9 @@ FA.treasureHunting = false
 local TREASURE_TIMEOUT = 180   -- 3 min master timeout
 
 -- Nav pixel action values (bot reads G channel of pixel 1)
-local ACTION_NONE      = 0
-local ACTION_TURN_LEFT = 1
+local ACTION_NONE       = 0
+local ACTION_TURN_LEFT  = 1
+local ACTION_TURN_RIGHT = 2
 
 ---------------------------------------------------------------------------
 -- Fishing state tracking (used by Root Crab detection + pixel state)
@@ -130,16 +131,22 @@ end
 ---------------------------------------------------------------------------
 local function StartTreasureReturn()
     if not FA.treasureHunting then return end
+    local hasSavedNav = FA.savedNav ~= nil
     StopTreasureHunting()
 
-    C_Timer.After(1.5, function()
-        if FA.savedNav then
-            print(FA.PREFIX .. "Treasure looted! Returning to fishing spot...")
-            FA.StartNavigation()
-        else
-            FA.SetPixelState("IDLE")
-        end
-    end)
+    -- Set IDLE immediately so bot exits treasure handler cleanly
+    FA.SetPixelState("IDLE")
+    print(FA.PREFIX .. "Treasure collected! Preparing to return...")
+
+    if hasSavedNav then
+        -- Delay to let loot finish, then start nav back (position + facing)
+        C_Timer.After(1.5, function()
+            if FA.savedNav then
+                print(FA.PREFIX .. "Navigating back to fishing spot...")
+                FA.StartNavigation()  -- sets pixel to NAV, bot follows
+            end
+        end)
+    end
 end
 
 ---------------------------------------------------------------------------
@@ -216,8 +223,11 @@ local function StartTreasureScan()
     -- Boost soft-interact range
     SetCVar("SoftTargetInteractRange", "40")
 
-    -- Start spinning (bot spams interact regardless of action value)
-    SetTreasureAction(ACTION_TURN_LEFT)
+    -- Random spin direction
+    local spinAction = (math.random(1, 2) == 1) and ACTION_TURN_LEFT or ACTION_TURN_RIGHT
+    local dirName = (spinAction == ACTION_TURN_LEFT) and "left" or "right"
+    print(FA.PREFIX .. "Spinning " .. dirName .. "...")
+    SetTreasureAction(spinAction)
 
     scanFrame:SetScript("OnUpdate", function()
         -- Master timeout
