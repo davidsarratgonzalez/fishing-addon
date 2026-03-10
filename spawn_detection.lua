@@ -228,21 +228,15 @@ local function StartTreasureScan()
     treasureStartTime = GetTime()
     treasureFound = false
 
-    -- Cancel fishing if active (SpellStopCasting is safe, but pcall for safety)
+    -- Note: SpellStopCasting() is a protected function — can't call it from
+    -- an event handler. The bot's rotation (key_down left/right) will cancel
+    -- the fishing channel automatically.
     if FA.isCurrentlyFishing then
-        local ok, err = pcall(SpellStopCasting)
-        if ok then
-            print(FA.PREFIX .. "Cancelled fishing for treasure hunt.")
-        else
-            print(FA.PREFIX .. "|cffff4444Failed to cancel fishing: " .. tostring(err) .. "|r")
-        end
+        print(FA.PREFIX .. "Fishing active — bot rotation will cancel it.")
     end
 
-    -- Boost soft-interact range (pcall in case CVar is protected in some state)
-    local ok, err = pcall(SetCVar, "SoftTargetInteractRange", "40")
-    if not ok then
-        print(FA.PREFIX .. "|cffff4444SetCVar blocked: " .. tostring(err) .. "|r")
-    end
+    -- Boost soft-interact range
+    SetCVar("SoftTargetInteractRange", "40")
 
     -- Random spin direction
     local spinAction = (math.random(1, 2) == 1) and ACTION_TURN_LEFT or ACTION_TURN_RIGHT
